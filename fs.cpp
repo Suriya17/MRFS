@@ -291,7 +291,8 @@ int search_fileinode(char *filename,bool should_delete){
         directory_block *temp=getdbaddr(tmp);
         for(int j=0;j<8;j++)
         {
-            if(strcmp(filename,temp->folder[j].file_name)==0&&temp->folder[j].inode_num>0)
+
+            if(strcmp(filename,temp->folder[j].file_name)==0&&temp->folder[j].inode_num>=0)
             {
                     tmp=temp->folder[j].inode_num;
                     if(should_delete)
@@ -513,27 +514,93 @@ int chdir_myfs(char *dirname)
     return 0;
 }
 
+int rmdir_myfs(char *dirname)
+{
+    int curr_inode_temp=curr_inode;
+    int tmp=search_fileinode(dirname,true);
+    if(tmp==-1) {
+        perror("Directory doesn't exist to delete");
+        return -1;
+    }
+    inode *del_inode=getinodeaddr(tmp);
+    for(int i=0;i<8;i++)
+    {
+        if(del_inode->direct_blocks[i]==-1) continue;
+        directory_block *dir_entry=getdbaddr(del_inode->direct_blocks[i]);
+        for(int k=0;k<8;k++)
+        {
+            if(dir_entry->folder[k].inode_num!=-1\
+               &&(strcmp(dir_entry->folder[k].file_name,".")!=0)\
+               &&(dir_entry->folder[k].file_name,"..")!=0\
+               &&(dir_entry->folder[k].file_name,"root")!=0)
+            {
+                    int inode_to_del=dir_entry->folder[k].inode_num;
+                    inode *new_inode1=getinodeaddr(inode_to_del);
+                    if(new_inode1->file_type==0)
+                    {
+                        curr_inode=tmp; 
+                        rmdir_myfs(dir_entry->folder[k].file_name);
+                        curr_inode=curr_inode_temp;
+                    }
+                    else{
+                    curr_inode=tmp; 
+                    rm_myfs(dir_entry->folder[k].file_name);
+                    curr_inode=curr_inode_temp;
+                    }
+            }
+        }
+        if(mySB->bitmap[del_inode->direct_blocks[i]]==1) mySB->used_blocks--;
+        mySB->bitmap[del_inode->direct_blocks[i]]=0;
+    }
+    mySB->inode_bitmap[tmp]=0;
+    mySB->max_inodes--;
+}
+
 
 int main(){
     create_myfs(10);
     directory_block *root_dir = (directory_block*)(myfs + DATA_START);
-    cout<<"Adding 12 files into myfs\n";
-    for(int i=0;i<12;i++)
+    // cout<<"Adding 12 files into myfs\n";
+    // for(int i=0;i<12;i++)
+    // {
+    //     char temp_name[15];
+    //     sprintf(temp_name,"mycode%d.cpp",i);
+    //     copy_pc2myfs((char *)"fs.cpp",temp_name);
+    // }
+    //ls_myfs();
+    // string del_file_name;
+    // cout<<"Enter the file to delete : ";
+    // cin>>del_file_name;
+    // rm_myfs((char *)del_file_name.c_str());
+    // ls_myfs();
+    mkdir_myfs((char *)"new dir");
+    ls_myfs();
+    cout << "\n\n\n";
+    chdir_myfs((char *)"new dir");
+    for(int i=0;i<10;i++)
     {
         char temp_name[15];
-        sprintf(temp_name,"mycode%d.cpp",i);
+        sprintf(temp_name,"mycode%d.cpp",i+15);
         copy_pc2myfs((char *)"fs.cpp",temp_name);
     }
+    mkdir_myfs((char *)"new dir123");
     ls_myfs();
-    string del_file_name;
-    cout<<"Enter the file to delete : ";
-    cin>>del_file_name;
-    rm_myfs((char *)del_file_name.c_str());
+    cout << "\n\n\n";
+    chdir_myfs((char *)"new dir123");
+    for(int i=0;i<10;i++)
+    {
+        char temp_name[15];
+        sprintf(temp_name,"mycode%d.cpp",i+15);
+        copy_pc2myfs((char *)"fs.cpp",temp_name);
+    }
+    cout<<"New dir files\n";
     ls_myfs();
-    // mkdir_myfs((char *)"new dir");
-    // ls_myfs();
-    // chdir_myfs((char *)"new dir");
-    // ls_myfs();
+    cout << "\n\n\n";
+    chdir_myfs((char *)"..");
+    chdir_myfs((char *)"..");
+    rmdir_myfs((char *)"new dir");
+    cout<<"Old dir files\n";
+    ls_myfs();
     cout<<"No of blocks used : "<<mySB->used_blocks<<endl;
     free(myfs);
 }
