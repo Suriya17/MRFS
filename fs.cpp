@@ -510,6 +510,12 @@ int chdir_myfs(char *dirname)
 {
     int tmp=search_fileinode(dirname,false);
     if(tmp==-1) return -1;
+    inode *new_inode=getinodeaddr(tmp);
+    if(new_inode->file_type==1)
+    {
+        cout<<"This is a file not directory\n";
+        return -1;
+    }
     curr_inode=tmp;
     return 0;
 }
@@ -531,9 +537,10 @@ int rmdir_myfs(char *dirname)
         {
             if(dir_entry->folder[k].inode_num!=-1\
                &&(strcmp(dir_entry->folder[k].file_name,".")!=0)\
-               &&(dir_entry->folder[k].file_name,"..")!=0\
-               &&(dir_entry->folder[k].file_name,"root")!=0)
+               &&(strcmp(dir_entry->folder[k].file_name,"..")!=0)\
+               &&(strcmp(dir_entry->folder[k].file_name,"root")!=0))
             {
+                    cout<<"deleting :"<<dir_entry->folder[k].file_name<<endl;
                     int inode_to_del=dir_entry->folder[k].inode_num;
                     inode *new_inode1=getinodeaddr(inode_to_del);
                     if(new_inode1->file_type==0)
@@ -557,52 +564,77 @@ int rmdir_myfs(char *dirname)
 }
 
 
-int main(){
+int main()
+{
     create_myfs(10);
     directory_block *root_dir = (directory_block*)(myfs + DATA_START);
-    // cout<<"Adding 12 files into myfs\n";
-    // for(int i=0;i<12;i++)
-    // {
-    //     char temp_name[15];
-    //     sprintf(temp_name,"mycode%d.cpp",i);
-    //     copy_pc2myfs((char *)"fs.cpp",temp_name);
-    // }
-    //ls_myfs();
-    // string del_file_name;
-    // cout<<"Enter the file to delete : ";
-    // cin>>del_file_name;
-    // rm_myfs((char *)del_file_name.c_str());
-    // ls_myfs();
-    mkdir_myfs((char *)"new dir");
-    ls_myfs();
-    cout << "\n\n\n";
-    chdir_myfs((char *)"new dir");
-    for(int i=0;i<10;i++)
+    cout<<"Added 12 files into myfs\n";
+    for(int i=0;i<12;i++)
     {
         char temp_name[15];
-        sprintf(temp_name,"mycode%d.cpp",i+15);
+        sprintf(temp_name,"mycode%d.cpp",i);
         copy_pc2myfs((char *)"fs.cpp",temp_name);
     }
-    mkdir_myfs((char *)"new dir123");
-    ls_myfs();
-    cout << "\n\n\n";
-    chdir_myfs((char *)"new dir123");
-    for(int i=0;i<10;i++)
+    int opt;
+    string s1,s2;
+    while(1)
     {
-        char temp_name[15];
-        sprintf(temp_name,"mycode%d.cpp",i+15);
-        copy_pc2myfs((char *)"fs.cpp",temp_name);
+        cout<<"1. list all files\n";
+        cout<<"2. Add a new directory\n";
+        cout<<"3. Change Dir\n";
+        cout<<"4. rm Dir\n";
+        cout<<"5. rm File\n";
+        cout<<"6. copy a new_file from PC to myfs\n";
+        cout<<"7. copy a file from myfs to PC\n";
+        cout<<"8. exit\n";
+        cout<<"select a option : ";
+        cin>>opt;
+        switch(opt)
+        {
+            case 1: ls_myfs();break;
+            case 2: 
+                cout<<"Enter dir name : ";
+                cin>>s1;
+                mkdir_myfs((char *)s1.c_str());
+                break;
+            case 3:
+                cout<<"Enter dir name : ";
+                cin>>s1;
+                chdir_myfs((char *)s1.c_str());
+                break;
+            case 4:
+                cout<<"Enter dir name : ";
+                cin>>s1;
+                rmdir_myfs((char *)s1.c_str());
+                break;
+            case 5:
+                cout<<"Enter file name : ";
+                cin>>s1;
+                rm_myfs((char *)s1.c_str());
+                break;
+            case 6:
+                cout<<"source file name :";
+                cin>>s1;
+                cout<<"dest file name :";
+                cin>>s2;
+                copy_pc2myfs((char *)s1.c_str(),(char *)s2.c_str());
+                break;
+            case 7:
+                cout<<"source file name :";
+                cin>>s1;
+                cout<<"dest file name :";
+                cin>>s2;
+                copy_myfs2pc((char *)s1.c_str(),(char *)s2.c_str());
+                break;
+            case 8: 
+                free(myfs);
+                return 0;
+            default:
+                cout<<"Wrong option entered\n";
+                break;
+        }
     }
-    cout<<"New dir files\n";
-    ls_myfs();
-    cout << "\n\n\n";
-    chdir_myfs((char *)"..");
-    chdir_myfs((char *)"..");
-    rmdir_myfs((char *)"new dir");
-    cout<<"Old dir files\n";
-    ls_myfs();
-    cout<<"No of blocks used : "<<mySB->used_blocks<<endl;
-    free(myfs);
+    
 }
 
 
