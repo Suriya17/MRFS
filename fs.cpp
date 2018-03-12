@@ -13,6 +13,8 @@ int init_inode(inode *myinode){
     myinode->indirect_block = -1;
     myinode->double_indirect_block = -1;
     myinode->file_size = 0;
+    myinode->last_modified=time(0);
+    myinode->last_read=time(0);
     return 0;
 }
 
@@ -49,6 +51,17 @@ int getnextfreeblock(){
     return -1;
 }
 
+int getnextfreeinode(){
+    for(int i = 0; i < mySB->max_inodes; i++){
+        if(mySB->inode_bitmap[i] == 0){
+            mySB->inode_bitmap[i] = 1;
+            mySB->used_inodes++;
+            return i;
+        }
+    }
+    return -1;
+}
+
 int make_directory_entry(char *name, int file_inode){
 
     inode * parent_inode=NULL;
@@ -65,6 +78,8 @@ int make_directory_entry(char *name, int file_inode){
                     strcpy(temp->folder[j].file_name,name);
                     return 0;
                 }
+                else if(strcmp(temp->folder[j].file_name,name)==0)
+                    return -1;
             }
         }
         else if(parent_inode->direct_blocks[i] == -1){
@@ -100,7 +115,6 @@ int create_myfs(int size){
     root_inode->file_type = 0;
     root_inode->st_mode=0644;
     root_inode->direct_blocks[0] = 0;
-    root_inode->last_modified=time(0);
     directory_block *root_dir = (directory_block*)(myfs + DATA_START);
 
     mydataspace = (data_block*)(myfs + DATA_START);
@@ -477,33 +491,34 @@ int showfile_myfs (char *filename)
 
 int mkdir_myfs(char *dirname)
 {
-    inode * parent_inode=getinodeaddr(curr_inode);
-    int tmp=getnextfreeblock();
-    make_directory_entry(dirname,tmp);
-    
+    int tmp=getnextfreeinode();
+    if(tmp==-1) return -1;
+    int temp=make_directory_entry(dirname,tmp);
+    if(temp==-1) return -1;
+    inode * new_dir_inode=getinodeaddr(tmp);
+    init_inode(new_dir_inode);
+    new_dir_inode->file_type = 0;
+    new_dir_inode->st_mode=0644;
+    return 0;
 }
 
 
 int main(){
     create_myfs(10);
     directory_block *root_dir = (directory_block*)(myfs + DATA_START);
-    copy_pc2myfs((char *)"fs.cpp",(char *)"mycode.cpp");
-    cout<<"Deleting mycode.cpp \n";
-    rm_myfs((char *)"mycode.cpp");
-    copy_pc2myfs((char *)"fs.cpp",(char *)"mycode.cpp");
-    copy_pc2myfs((char *)"fs.h",(char *)"mycode2.cpp");
-    copy_myfs2pc((char *)"mycode.cpp",(char *)"mycode4.cpp");
+    for(int i=0;i<12;i++)
+    {
+        char temp_name[15];
+        sprintf(temp_name,"mycode%d.cpp",i);
+        copy_pc2myfs((char *)"fs.cpp",temp_name);
+    }
     ls_myfs();
-    
-    cout<<"Deleting mycode.cpp \n";
-    rm_myfs((char *)"mycode.cpp");
+    string del_file_name;
+    cout<<"Enter the file to delete : ";
+    cin>>del_file_name;
+    rm_myfs((char *)del_file_name.c_str());
     ls_myfs();
-    cout<<"Showing file fs.h"<<endl;
-    showfile_myfs((char *)"mycode2.cpp");
-    cout<<"\nDeleting mycode2.cpp \n";
-    rm_myfs((char *)"mycode2.cpp");
-    ls_myfs();
-    cout<<"\nNo of blocks used : "<<mySB->used_blocks<<endl;
+    cout<<"No of blocks used : "<<mySB->used_blocks<<endl;
     free(myfs);
 }
 
