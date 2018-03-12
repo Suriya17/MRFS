@@ -62,10 +62,11 @@ int getnextfreeinode(){
     return -1;
 }
 
-int make_directory_entry(char *name, int file_inode){
+
+int make_directory_entry(char *name, int file_inode,int entry_inode){
 
     inode * parent_inode=NULL;
-    parent_inode = (inode *)(myfs + INODE_START+curr_inode*128);
+    parent_inode = (inode *)(myfs + INODE_START+entry_inode*128);
     directory_block *temp;
     parent_inode->file_size+=32;
 
@@ -200,7 +201,7 @@ int copy_pc2myfs (char *source, char *dest){
             free_block_num.push_back(p);
             mySB->bitmap[p] = 1;
     }
-    make_directory_entry(dest,free_inode_num);
+    make_directory_entry(dest,free_inode_num,curr_inode);
 
     for(int i=0;i<min(8,(int)free_block_num.size());i++)
     {
@@ -493,12 +494,22 @@ int mkdir_myfs(char *dirname)
 {
     int tmp=getnextfreeinode();
     if(tmp==-1) return -1;
-    int temp=make_directory_entry(dirname,tmp);
+    int temp=make_directory_entry(dirname,tmp,curr_inode);
     if(temp==-1) return -1;
     inode * new_dir_inode=getinodeaddr(tmp);
     init_inode(new_dir_inode);
     new_dir_inode->file_type = 0;
     new_dir_inode->st_mode=0644;
+    make_directory_entry((char *)".",tmp,tmp);
+    make_directory_entry((char *)"..",curr_inode,tmp);
+    return 0;
+}
+
+int chdir_myfs(char *dirname)
+{
+    int tmp=search_fileinode(dirname,false);
+    if(tmp==-1) return -1;
+    curr_inode=tmp;
     return 0;
 }
 
@@ -506,6 +517,7 @@ int mkdir_myfs(char *dirname)
 int main(){
     create_myfs(10);
     directory_block *root_dir = (directory_block*)(myfs + DATA_START);
+    cout<<"Adding 12 files into myfs\n";
     for(int i=0;i<12;i++)
     {
         char temp_name[15];
@@ -518,6 +530,10 @@ int main(){
     cin>>del_file_name;
     rm_myfs((char *)del_file_name.c_str());
     ls_myfs();
+    // mkdir_myfs((char *)"new dir");
+    // ls_myfs();
+    // chdir_myfs((char *)"new dir");
+    // ls_myfs();
     cout<<"No of blocks used : "<<mySB->used_blocks<<endl;
     free(myfs);
 }
