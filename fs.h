@@ -13,7 +13,7 @@
 #include <unistd.h>
 #include <algorithm>
 
-
+#define MAX_FD_ENTRIES 100
 #define MAX_BLOCKS 131072
 #define MAX_INODES 126
 #define BLOCK_SIZE 256
@@ -42,6 +42,14 @@ struct super_block{
     bitset<MAX_INODES> inode_bitmap;
 };
 
+struct fd_entry{
+    int file_inode_num;
+    int bytes_done;
+    char mode;
+};
+
+fd_entry fd_table[MAX_FD_ENTRIES];
+
 struct directory{
     char file_name[30];
     int16_t inode_num;
@@ -62,10 +70,12 @@ struct inode{
     time_t last_read;
 };
 
+void fd_table_init();
 void perm_print(mode_t mode);
 int myprint(char *str,int size);
 int getnextfreeblock();
 int getnextfreeinode();
+int getnextfreefdentry();
 directory_block* getdbaddr(int i);
 inode * getinodeaddr(int i);
 indirect_pointers * getidpaddr(int i);
@@ -83,7 +93,7 @@ int ls_myfs();
 int mkdir_myfs(char *dirname);
 int chdir_myfs(char *dirname);
 int rmdir_myfs(char *dirname);
-int open_myfs(char *filename, char *mode);
+int open_myfs(char *filename, char mode);
 int close_myfs(int fd);
 int read_myfs(int fd, int nbytes, char *buf);
 int write_myfs(int fd, int nbytes, char *buf);

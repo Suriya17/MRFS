@@ -2,6 +2,7 @@
 
 char* myfs = NULL;
 int curr_inode=0;
+int myfs_size=0;
 super_block *mySB ;
 data_block *mydataspace;
 
@@ -96,6 +97,7 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
 
 int create_myfs(int size){
     int size_in_bytes = size << 20;
+    myfs_size=size_in_bytes;
     myfs = (char*)malloc(size_in_bytes);
 
     if(myfs == NULL)
@@ -563,18 +565,106 @@ int rmdir_myfs(char *dirname)
     mySB->max_inodes--;
 }
 
+void fd_table_init()
+{
+    for(int i=0;i<MAX_FD_ENTRIES;i++)
+        fd_table[i].file_inode_num=-1;
+}
+
+int getnextfreefdentry()
+{
+     for(int i=0;i<MAX_FD_ENTRIES;i++)
+     {
+        if(fd_table[i].file_inode_num==-1) 
+        return i;
+     }
+    return -1;
+}
+
+int open_myfs(char *filename, char mode)
+{
+    int tmp=getnextfreefdentry();
+    if(tmp==-1)
+    {
+        cout<<"No space left in fd_table\n";
+        return -1;
+    }
+    int file_inodenum=search_fileinode(filename,false);
+    if(file_inodenum==-1) return -1;
+    fd_table[tmp].file_inode_num=file_inodenum;
+    fd_table[tmp].bytes_done=0;
+    fd_table[tmp].mode=mode;
+    return 0;
+}
+
+int close_myfs(int fd)
+{
+    if(fd>=MAX_FD_ENTRIES||(fd_table[fd].file_inode_num==-1))
+        return -1;
+    fd_table[fd].file_inode_num=-1;
+    return 0;
+}
+
+
+
+
+int eof_myfs(int fd)
+{
+    if(fd>=MAX_FD_ENTRIES||(fd_table[fd].file_inode_num==-1)) 
+        return -1;
+    int file_inodenum=fd_table[fd].file_inode_num;
+    int bytes_read=fd_table[fd].bytes_done;
+    inode * file_inode=(inode *)getinodeaddr(file_inodenum);
+    int f_size= file_inode->file_size;
+    if(bytes_read==f_size)  return 1;
+    else return 0;
+}
+
+int dump_myfs(char *dumpfile)
+{
+    int file_fd=open(dumpfile,O_WRONLY|O_CREAT,0664);
+    if(file_fd < 0){
+        cout << "OH NO FILE FD" << endl;
+        return -1;
+    }
+    char buf[12];
+    sprintf(buf,"%d",myfs_size);
+    write(file_fd,buf,12);
+    write(file_fd,myfs,myfs_size);
+    close(file_fd);
+    return 0;
+}
+
+int restore_myfs(char *dumpfile)
+{
+    int file_fd=open(dumpfile,O_RDONLY);
+    if(file_fd < 0){
+        cout << "OH NO FILE FD" << endl;
+        return -1;
+    }
+    char buf[12];
+    read(file_fd,buf,12);
+    myfs_size=atoi(buf);
+    myfs = (char*)malloc(myfs_size);
+    read(file_fd,myfs,myfs_size);
+    mySB = (super_block *) myfs;
+    mydataspace = (data_block*)(myfs + DATA_START);
+    curr_inode=0;
+    close(file_fd);
+    return 0;
+}
 
 int main()
 {
-    create_myfs(10);
-    directory_block *root_dir = (directory_block*)(myfs + DATA_START);
-    cout<<"Added 12 files into myfs\n";
-    for(int i=0;i<12;i++)
-    {
-        char temp_name[15];
-        sprintf(temp_name,"mycode%d.cpp",i);
-        copy_pc2myfs((char *)"fs.cpp",temp_name);
-    }
+    // create_myfs(10);
+    // directory_block *root_dir = (directory_block*)(myfs + DATA_START);
+    // cout<<"Added 12 files into myfs\n";
+    // for(int i=0;i<12;i++)
+    // {
+    //     char temp_name[15];
+    //     sprintf(temp_name,"mycode%d.cpp",i);
+    //     copy_pc2myfs((char *)"fs.cpp",temp_name);
+    // }
     int opt;
     string s1,s2;
     while(1)
@@ -587,6 +677,8 @@ int main()
         cout<<"6. copy a new_file from PC to myfs\n";
         cout<<"7. copy a file from myfs to PC\n";
         cout<<"8. exit\n";
+        cout<<"9. dumptofile\n";
+        cout<<"10. restorefromfile\n";
         cout<<"select a option : ";
         cin>>opt;
         switch(opt)
@@ -629,6 +721,11 @@ int main()
             case 8: 
                 free(myfs);
                 return 0;
+            case 9:
+                dump_myfs((char *)"backup");
+                break;
+            case 10:
+                restore_myfs((char *)"backup"); break;
             default:
                 cout<<"Wrong option entered\n";
                 break;
