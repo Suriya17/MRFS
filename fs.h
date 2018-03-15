@@ -23,6 +23,7 @@
 
 using namespace std;
 
+extern int myfs_size;
 extern char* myfs;
 extern int curr_inode;
 
@@ -48,7 +49,6 @@ struct fd_entry{
     char mode;
 };
 
-fd_entry fd_table[MAX_FD_ENTRIES];
 
 struct directory{
     char file_name[30];
