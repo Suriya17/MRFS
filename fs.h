@@ -55,6 +55,10 @@ struct directory{
     int16_t inode_num;
 };
 
+extern super_block *mySB ;
+extern data_block *mydataspace;
+extern fd_entry fd_table[MAX_FD_ENTRIES];
+
 struct directory_block{
     directory folder[BLOCK_SIZE/32];
 };
@@ -81,7 +85,7 @@ inode * getinodeaddr(int i);
 indirect_pointers * getidpaddr(int i);
 data_block *getdatablockaddr(int i);
 int search_fileinode(char *filename, bool should_delete);
-int make_directory_entry(char *name, int file_inode);
+int make_directory_entry(char *name, int file_inode, int parent_inode);
 int init_inode(inode *myinode);
 int init_directory_block(directory_block *mydirblock);
 void init_indirect_block(int blk_num);

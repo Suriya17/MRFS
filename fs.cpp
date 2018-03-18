@@ -695,8 +695,12 @@ int getnextfreefdentry()
 
 int open_myfs(char *filename, char mode)
 {
-    int file_inodenum=search_fileinode(filename,false);
-    if(file_inodenum==-1) return -1;
+    int file_inodenum = search_fileinode(filename,false);
+    if(file_inodenum == -1) {
+        file_inodenum = getnextfreeinode();
+        init_inode(getinodeaddr(file_inodenum));
+        make_directory_entry(filename,file_inodenum,curr_inode);
+    }
     int tmp=getnextfreefdentry();
     if(tmp==-1)
     {
@@ -865,6 +869,7 @@ int read_myfs(int fd, int nbytes, char *buf)
         }
     }
     fd_table[fd].bytes_done+=temp;
+    file_inode->last_read = time(0);
     
     return temp;
 }
@@ -975,6 +980,7 @@ int write_myfs(int fd, int nbytes, char *buf)
     
     fd_table[fd].bytes_done+=temp;
     file_inode->file_size=max(f_size,fd_table[fd].bytes_done);
+    file_inode->last_modified = time(0);
     return temp;
 }
 
@@ -1007,112 +1013,112 @@ int status_myfs(){
     return 0;
 }
 
-int main()
-{
-    create_myfs(15);
-    directory_block *root_dir = (directory_block*)(myfs + DATA_START);
-    cout<<"Added 12 files into myfs\n";
-    for(int i=0;i<12;i++)
-    {
-        char temp_name[15];
-        sprintf(temp_name,"mycode%d.cpp",i);
-        copy_pc2myfs((char *)"fs.cpp",temp_name);
-    }
-    copy_pc2myfs((char *)"Lab_5.pdf",(char *)"Lab_5.pdf");
-    copy_pc2myfs((char *)"fs.cpp",(char *)"test.pdf");
-    int opt;
-    char buff[245];
-    int fd,temp;
-    string s1,s2;
-    while(1)
-    {
-        cout<<"1. list all files\n";
-        cout<<"2. Add a new directory\n";
-        cout<<"3. Change Dir\n";
-        cout<<"4. rm Dir\n";
-        cout<<"5. rm File\n";
-        cout<<"6. copy a new_file from PC to myfs\n";
-        cout<<"7. copy a file from myfs to PC\n";
-        cout<<"8. exit\n";
-        cout<<"9. dumptofile\n";
-        cout<<"10. restorefromfile\n";
-        cout<<"select a option : ";
-        cin>>opt;
-        switch(opt)
-        {
-            case 1: ls_myfs();break;
-            case 2: 
-                cout<<"Enter dir name : ";
-                cin>>s1;
-                mkdir_myfs((char *)s1.c_str());
-                break;
-            case 3:
-                cout<<"Enter dir name : ";
-                cin>>s1;
-                chdir_myfs((char *)s1.c_str());
-                break;
-            case 4:
-                cout<<"Enter dir name : ";
-                cin>>s1;
-                rmdir_myfs((char *)s1.c_str());
-                break;
-            case 5:
-                cout<<"Enter file name : ";
-                cin>>s1;
-                rm_myfs((char *)s1.c_str());
-                break;
-            case 6:
-                cout<<"source file name :";
-                cin>>s1;
-                cout<<"dest file name :";
-                cin>>s2;
-                copy_pc2myfs((char *)s1.c_str(),(char *)s2.c_str());
-                break;
-            case 7:
-                cout<<"source file name :";
-                cin>>s1;
-                cout<<"dest file name :";
-                cin>>s2;
-                copy_myfs2pc((char *)s1.c_str(),(char *)s2.c_str());
-                break;
-            case 8: 
-                free(myfs);
-                return 0;
-            case 9:
-                fd=chmod_myfs((char *)"yo",777);
+// int main()
+// {
+//     create_myfs(15);
+//     directory_block *root_dir = (directory_block*)(myfs + DATA_START);
+//     cout<<"Added 12 files into myfs\n";
+//     for(int i=0;i<12;i++)
+//     {
+//         char temp_name[15];
+//         sprintf(temp_name,"mycode%d.cpp",i);
+//         copy_pc2myfs((char *)"fs.cpp",temp_name);
+//     }
+//     copy_pc2myfs((char *)"Lab_5.pdf",(char *)"Lab_5.pdf");
+//     copy_pc2myfs((char *)"fs.cpp",(char *)"test.pdf");
+//     int opt;
+//     char buff[245];
+//     int fd,temp;
+//     string s1,s2;
+//     while(1)
+//     {
+//         cout<<"1. list all files\n";
+//         cout<<"2. Add a new directory\n";
+//         cout<<"3. Change Dir\n";
+//         cout<<"4. rm Dir\n";
+//         cout<<"5. rm File\n";
+//         cout<<"6. copy a new_file from PC to myfs\n";
+//         cout<<"7. copy a file from myfs to PC\n";
+//         cout<<"8. exit\n";
+//         cout<<"9. dumptofile\n";
+//         cout<<"10. restorefromfile\n";
+//         cout<<"select a option : ";
+//         cin>>opt;
+//         switch(opt)
+//         {
+//             case 1: ls_myfs();break;
+//             case 2: 
+//                 cout<<"Enter dir name : ";
+//                 cin>>s1;
+//                 mkdir_myfs((char *)s1.c_str());
+//                 break;
+//             case 3:
+//                 cout<<"Enter dir name : ";
+//                 cin>>s1;
+//                 chdir_myfs((char *)s1.c_str());
+//                 break;
+//             case 4:
+//                 cout<<"Enter dir name : ";
+//                 cin>>s1;
+//                 rmdir_myfs((char *)s1.c_str());
+//                 break;
+//             case 5:
+//                 cout<<"Enter file name : ";
+//                 cin>>s1;
+//                 rm_myfs((char *)s1.c_str());
+//                 break;
+//             case 6:
+//                 cout<<"source file name :";
+//                 cin>>s1;
+//                 cout<<"dest file name :";
+//                 cin>>s2;
+//                 copy_pc2myfs((char *)s1.c_str(),(char *)s2.c_str());
+//                 break;
+//             case 7:
+//                 cout<<"source file name :";
+//                 cin>>s1;
+//                 cout<<"dest file name :";
+//                 cin>>s2;
+//                 copy_myfs2pc((char *)s1.c_str(),(char *)s2.c_str());
+//                 break;
+//             case 8: 
+//                 free(myfs);
+//                 return 0;
+//             case 9:
+//                 fd=chmod_myfs((char *)"yo",777);
                 
-                break;
-            case 10:
-                restore_myfs((char *)"backup"); break;
-            default:
-                cout<<"Wrong option entered\n";
-                break;
-        }
-    }
+//                 break;
+//             case 10:
+//                 restore_myfs((char *)"backup"); break;
+//             default:
+//                 cout<<"Wrong option entered\n";
+//                 break;
+//         }
+//     }
 
-    // ls_myfs();
-    // fd=open_myfs((char *)"Lab_5.pdf",'r');
-    // int fd1=open_myfs((char *)"test.pdf",'w');
-    // if(fd1==-1) cout<<"oh no fd\n";
-    // temp=read_myfs(fd,245,buff);
-    // write_myfs(fd1,temp,buff);
-    // // int sz=0;
-    // // sz+=temp;
-    // // cout << temp << endl;
-    // while(temp)
-    // {
-    //     temp=read_myfs(fd,245,buff);
-    //     write_myfs(fd1,temp,buff);
-    //     // showfile_myfs((char *)"test.pdf");
+//     // ls_myfs();
+//     // fd=open_myfs((char *)"Lab_5.pdf",'r');
+//     // int fd1=open_myfs((char *)"test.pdf",'w');
+//     // if(fd1==-1) cout<<"oh no fd\n";
+//     // temp=read_myfs(fd,245,buff);
+//     // write_myfs(fd1,temp,buff);
+//     // // int sz=0;
+//     // // sz+=temp;
+//     // // cout << temp << endl;
+//     // while(temp)
+//     // {
+//     //     temp=read_myfs(fd,245,buff);
+//     //     write_myfs(fd1,temp,buff);
+//     //     // showfile_myfs((char *)"test.pdf");
         
-    //     // cout<<"new read :" <<endl;
-    //    // cout << temp << endl;
-    // }
-    // // cout<<sz<<endl;
+//     //     // cout<<"new read :" <<endl;
+//     //    // cout << temp << endl;
+//     // }
+//     // // cout<<sz<<endl;
 
-    // copy_myfs2pc((char *)"test.pdf",(char *)"test.pdf");
-    // close_myfs(fd);
-    // close_myfs(fd1);
-}
+//     // copy_myfs2pc((char *)"test.pdf",(char *)"test.pdf");
+//     // close_myfs(fd);
+//     // close_myfs(fd1);
+// }
 
 
