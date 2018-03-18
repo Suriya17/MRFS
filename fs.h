@@ -80,10 +80,14 @@ directory_block* getdbaddr(int i);
 inode * getinodeaddr(int i);
 indirect_pointers * getidpaddr(int i);
 data_block *getdatablockaddr(int i);
-int search_fileinode(char *filename);
+int search_fileinode(char *filename, bool should_delete);
 int make_directory_entry(char *name, int file_inode);
 int init_inode(inode *myinode);
 int init_directory_block(directory_block *mydirblock);
+void init_indirect_block(int blk_num);
+void print_directory_block(directory_block *temp);
+int decTooct(int i);
+
 int create_myfs(int size);
 int copy_pc2myfs (char *source, char *dest);
 int copy_myfs2pc (char *source, char *dest);

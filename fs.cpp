@@ -11,7 +11,7 @@ void init_indirect_block(int blk_num)
 {
     indirect_pointers * idp = getidpaddr(blk_num);
     for(int i=0;i<64;i++)
-    idp->arr[i]=-1;
+        idp->arr[i]=-1;
 }
 
 int init_inode(inode *myinode){
@@ -99,6 +99,36 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
             return 0;
         }
     }
+
+    if(parent_inode->indirect_block < 0){
+        parent_inode->indirect_block = getnextfreeblock();
+        init_indirect_block(parent_inode->indirect_block);
+    }
+
+    indirect_pointers *single_indirect = getidpaddr(parent_inode->indirect_block);
+    for(int i = 0; i < 64; i++){
+        if(single_indirect->arr[i] > 0){
+            temp = getdbaddr(single_indirect->arr[i]);
+            for(int j = 0; j < 8; j++){
+                if(temp->folder[j].inode_num == -1){
+                    temp->folder[j].inode_num = file_inode;
+                    strcpy(temp->folder[j].file_name,name);
+                    return 0;
+                }
+                else if(strcmp(temp->folder[j].file_name,name)==0)
+                    return -1;
+            }
+        }
+        else{
+            single_indirect->arr[i] = getnextfreeblock();
+            temp = getdbaddr(single_indirect->arr[i]);
+            init_directory_block(temp);
+            temp->folder[0].inode_num = file_inode;
+            strcpy(temp->folder[0].file_name,name);
+            return 0;
+        }
+    }
+
 }
 
 int create_myfs(int size){
@@ -264,31 +294,50 @@ void perm_print(mode_t mode)
     cout<< ((mode & S_IXOTH) ? "x" : "-");
 }
 
+
+void print_directory_block(directory_block *temp){
+    inode *file_inode;
+    for(int j = 0;j < 8;j++)
+    {
+        if(temp->folder[j].inode_num!=-1)
+        {
+            file_inode=getinodeaddr(temp->folder[j].inode_num);
+            cout<< ((file_inode->file_type==0) ? "d" : "-");
+            perm_print(file_inode->st_mode);
+            cout<<" ";
+            cout<<file_inode->file_size<<" ";
+            cout<<setw(20)<<temp->folder[j].file_name<<" ";
+            cout<<ctime(& (file_inode->last_modified));
+        }
+    }
+}
+
 int ls_myfs()
 {
     inode * parent_inode=NULL;
     parent_inode = (inode *)(myfs + INODE_START+curr_inode*128);
-    inode *file_inode=NULL;
     for(int i=0;i<8;i++)
     {
        // cout<<"245o\n";
         int tmp=parent_inode->direct_blocks[i];
-        if(tmp==-1) break;
+        if(tmp==-1) continue;
         directory_block *temp=getdbaddr(tmp);
-        for(int j=0;j<8;j++)
-        {
-            if(temp->folder[j].inode_num!=-1)
-            {
-                file_inode=getinodeaddr(temp->folder[j].inode_num);
-                cout<< ((file_inode->file_type==0) ? "d" : "-");
-                perm_print(file_inode->st_mode);
-                cout<<" ";
-                cout<<file_inode->file_size<<" ";
-                cout<<setw(20)<<temp->folder[j].file_name<<" ";
-                cout<<ctime(& (file_inode->last_modified));
-            }
+        print_directory_block(temp);
+    }
+
+    if(parent_inode->indirect_block == -1)
+        return 0;
+
+    indirect_pointers *single_indirect = getidpaddr(parent_inode->indirect_block);
+    for(int i = 0; i < 64; i++){
+        if(single_indirect->arr[i] == -1)
+            continue;
+        else{
+            directory_block *temp = getdbaddr(single_indirect->arr[i]);
+            print_directory_block(temp);
         }
     }
+
 }
 
 int search_fileinode(char *filename,bool should_delete){
@@ -302,24 +351,42 @@ int search_fileinode(char *filename,bool should_delete){
         directory_block *temp=getdbaddr(tmp);
         for(int j=0;j<8;j++)
         {
-
             if(strcmp(filename,temp->folder[j].file_name)==0&&temp->folder[j].inode_num>=0)
             {
-                    tmp=temp->folder[j].inode_num;
-                    if(should_delete)
-                    {
-                        temp->folder[j].inode_num=-1;
-                        parent_inode->file_size-=32;
-                    }
-                    return tmp;
+                tmp=temp->folder[j].inode_num;
+                if(should_delete)
+                {
+                    temp->folder[j].inode_num=-1;
+                    parent_inode->file_size-=32;
+                }
+                return tmp;
             }
         }
-
     }
+
+    if(parent_inode->indirect_block > 0){
+        indirect_pointers * idp = getidpaddr(parent_inode->indirect_block);
+        for(int i = 0; i < 64; i++){
+            if(idp->arr[i] > 0){
+                directory_block *temp=getdbaddr(idp->arr[i]);
+                for(int j=0;j<8;j++)
+                {
+                    if(strcmp(filename,temp->folder[j].file_name)==0&&temp->folder[j].inode_num>=0)
+                    {
+                        int tmp=temp->folder[j].inode_num;
+                        if(should_delete)
+                        {
+                            temp->folder[j].inode_num=-1;
+                            parent_inode->file_size-=32;
+                        }
+                        return tmp;
+                    }
+                }
+            }
+        }
+    }
+
     return -1;
-
-
-
 }
 
 int rm_myfs (char *filename){
@@ -561,15 +628,51 @@ int rmdir_myfs(char *dirname)
                         curr_inode=curr_inode_temp;
                     }
                     else{
-                    curr_inode=tmp; 
-                    rm_myfs(dir_entry->folder[k].file_name);
-                    curr_inode=curr_inode_temp;
+                        curr_inode=tmp; 
+                        rm_myfs(dir_entry->folder[k].file_name);
+                        curr_inode=curr_inode_temp;
                     }
             }
         }
         if(mySB->bitmap[del_inode->direct_blocks[i]]==1) mySB->used_blocks--;
         mySB->bitmap[del_inode->direct_blocks[i]]=0;
     }
+
+    if(del_inode->indirect_block > 0){
+        indirect_pointers *single_indirect = getidpaddr(del_inode->indirect_block);
+        for(int i = 0; i < 64; i++){
+            if(single_indirect->arr[i] > 0){
+
+                directory_block *dir_entry=getdbaddr(single_indirect->arr[i]);
+                for(int k = 0;k < 8; k++){
+                    if(dir_entry->folder[k].inode_num!=-1\
+                    &&(strcmp(dir_entry->folder[k].file_name,".")!=0)\
+                    &&(strcmp(dir_entry->folder[k].file_name,"..")!=0)\
+                    &&(strcmp(dir_entry->folder[k].file_name,"root")!=0))
+                    {
+                        cout<<"deleting :"<<dir_entry->folder[k].file_name<<endl;
+                        int inode_to_del=dir_entry->folder[k].inode_num;
+                        inode *new_inode1=getinodeaddr(inode_to_del);
+                        if(new_inode1->file_type==0)
+                        {
+                            curr_inode=tmp; 
+                            rmdir_myfs(dir_entry->folder[k].file_name);
+                            curr_inode=curr_inode_temp;
+                        }
+                        else{
+                            curr_inode=tmp; 
+                            rm_myfs(dir_entry->folder[k].file_name);
+                            curr_inode=curr_inode_temp;
+                        }
+                    }
+
+                    if(mySB->bitmap[single_indirect->arr[i]]==1) mySB->used_blocks--;
+                    mySB->bitmap[del_inode->indirect_block]=0;
+                }
+            }
+        }
+    }
+
     mySB->inode_bitmap[tmp]=0;
     mySB->max_inodes--;
 }
@@ -659,6 +762,7 @@ int restore_myfs(char *dumpfile)
     mySB = (super_block *) myfs;
     mydataspace = (data_block*)(myfs + DATA_START);
     curr_inode=0;
+    fd_table_init();
     close(file_fd);
     return 0;
 }
@@ -875,6 +979,34 @@ int write_myfs(int fd, int nbytes, char *buf)
 }
 
 
+int decTooct(int i)
+{
+    return (i%10) + ((i%100 - i%10)/10)*8 + ((i%1000 - i%100)/100)*64;
+}
+
+int chmod_myfs(char *name, int mode)
+{
+    int inode_num = search_fileinode(name,false);
+
+    if(inode_num == -1)
+        return -1;
+
+    inode *inode_ptr = getinodeaddr(inode_num);
+    inode_ptr->st_mode = decTooct(mode);
+    return 0;
+}
+
+int status_myfs(){
+    cout << "Total size of myfs : " << mySB->total_size << endl;
+    cout << "Total available datablocks : " << mySB->max_blocks \
+    << "Total used blocks : " << mySB->used_blocks << endl;
+    cout << "Total available inodes : " << mySB->max_inodes \
+    << "Total used inodes : " << mySB->used_inodes << endl;
+    cout << "Total free inodes : " << mySB->max_inodes - mySB->used_inodes\
+    << "Total free blocks : " << mySB->max_blocks - mySB->used_blocks << endl;
+    return 0;
+}
+
 int main()
 {
     create_myfs(15);
@@ -892,7 +1024,7 @@ int main()
     char buff[245];
     int fd,temp;
     string s1,s2;
-   /* while(1)
+    while(1)
     {
         cout<<"1. list all files\n";
         cout<<"2. Add a new directory\n";
@@ -947,12 +1079,8 @@ int main()
                 free(myfs);
                 return 0;
             case 9:
-                fd=open_myfs((char *)"mycode3.cpp",'r');
+                fd=chmod_myfs((char *)"yo",777);
                 
-                read_myfs(fd,245,buff);
-                myprint(buff,245);
-                read_myfs(fd,245,buff);
-                myprint(buff,245);
                 break;
             case 10:
                 restore_myfs((char *)"backup"); break;
@@ -960,30 +1088,31 @@ int main()
                 cout<<"Wrong option entered\n";
                 break;
         }
-    }*/
-    ls_myfs();
-    fd=open_myfs((char *)"Lab_5.pdf",'r');
-    int fd1=open_myfs((char *)"test.pdf",'w');
-    if(fd1==-1) cout<<"oh no fd\n";
-    temp=read_myfs(fd,245,buff);
-    write_myfs(fd1,temp,buff);
-    // int sz=0;
-    // sz+=temp;
-    // cout << temp << endl;
-    while(temp)
-    {
-        temp=read_myfs(fd,245,buff);
-        write_myfs(fd1,temp,buff);
-        // showfile_myfs((char *)"test.pdf");
-        
-        // cout<<"new read :" <<endl;
-       // cout << temp << endl;
     }
-    // cout<<sz<<endl;
 
-    copy_myfs2pc((char *)"test.pdf",(char *)"test.pdf");
-    close_myfs(fd);
-    close_myfs(fd1);
+    // ls_myfs();
+    // fd=open_myfs((char *)"Lab_5.pdf",'r');
+    // int fd1=open_myfs((char *)"test.pdf",'w');
+    // if(fd1==-1) cout<<"oh no fd\n";
+    // temp=read_myfs(fd,245,buff);
+    // write_myfs(fd1,temp,buff);
+    // // int sz=0;
+    // // sz+=temp;
+    // // cout << temp << endl;
+    // while(temp)
+    // {
+    //     temp=read_myfs(fd,245,buff);
+    //     write_myfs(fd1,temp,buff);
+    //     // showfile_myfs((char *)"test.pdf");
+        
+    //     // cout<<"new read :" <<endl;
+    //    // cout << temp << endl;
+    // }
+    // // cout<<sz<<endl;
+
+    // copy_myfs2pc((char *)"test.pdf",(char *)"test.pdf");
+    // close_myfs(fd);
+    // close_myfs(fd1);
 }
 
 
