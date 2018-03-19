@@ -12,6 +12,9 @@
 #include <vector>
 #include <unistd.h>
 #include <algorithm>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
 
 #define MAX_FD_ENTRIES 100
 #define MAX_BLOCKS 131072
@@ -21,11 +24,21 @@
 #define DATA_START 32768
 #define DATA_DIR_START 128
 
+
+#define P(s) semop(s, &pop, 1)  /* pop is the structure we pass for doing
+				   the P(s) operation */
+#define V(s) semop(s, &vop, 1)  /* vop is the structure we pass for doing
+				   the V(s) operation */
+
+extern int inode_sem, data_block_sem, make_dir_entry_sem;
+extern struct sembuf pop, vop ;
+
 using namespace std;
 
 extern int myfs_size;
 extern char* myfs;
 extern int curr_inode;
+extern int shmid;
 
 struct data_block{
     char data[BLOCK_SIZE];
@@ -74,6 +87,8 @@ struct inode{
     time_t last_read;
 };
 
+
+void init_semaphores();
 void fd_table_init();
 void perm_print(mode_t mode);
 int myprint(char *str,int size);

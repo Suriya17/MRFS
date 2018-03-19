@@ -6,6 +6,9 @@ int myfs_size=0;
 super_block *mySB ;
 data_block *mydataspace;
 fd_entry fd_table[MAX_FD_ENTRIES];
+int shmid;
+int inode_sem, data_block_sem, make_dir_entry_sem;
+struct sembuf pop, vop ;
 
 void init_indirect_block(int blk_num)
 {
@@ -48,30 +51,36 @@ int init_directory_block(directory_block *mydirblock){
 }
 
 int getnextfreeblock(){
+    P(data_block_sem);
     for(int i = 0; i < mySB->max_blocks; i++){
         if(mySB->bitmap[i] == 0){
             mySB->bitmap[i] = 1;
             mySB->used_blocks++;
+            V(data_block_sem);
             return i;
         }
     }
+    V(data_block_sem);
     return -1;
 }
 
 int getnextfreeinode(){
+    P(inode_sem);
     for(int i = 0; i < mySB->max_inodes; i++){
         if(mySB->inode_bitmap[i] == 0){
             mySB->inode_bitmap[i] = 1;
             mySB->used_inodes++;
+            V(inode_sem);
             return i;
         }
     }
+    V(inode_sem);
     return -1;
 }
 
 
 int make_directory_entry(char *name, int file_inode,int entry_inode){
-
+    P(make_dir_entry_sem);
     inode * parent_inode=NULL;
     parent_inode = (inode *)(myfs + INODE_START+entry_inode*128);
     directory_block *temp;
@@ -84,10 +93,13 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
                 if(temp->folder[j].inode_num == -1){
                     temp->folder[j].inode_num = file_inode;
                     strcpy(temp->folder[j].file_name,name);
+                    V(make_dir_entry_sem);
                     return 0;
                 }
-                else if(strcmp(temp->folder[j].file_name,name)==0)
+                else if(strcmp(temp->folder[j].file_name,name)==0){
+                    V(make_dir_entry_sem);
                     return -1;
+                }
             }
         }
         else if(parent_inode->direct_blocks[i] == -1){
@@ -96,6 +108,7 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
             init_directory_block(temp);
             temp->folder[0].inode_num = file_inode;
             strcpy(temp->folder[0].file_name,name);
+            V(make_dir_entry_sem);
             return 0;
         }
     }
@@ -113,10 +126,13 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
                 if(temp->folder[j].inode_num == -1){
                     temp->folder[j].inode_num = file_inode;
                     strcpy(temp->folder[j].file_name,name);
+                    V(make_dir_entry_sem);
                     return 0;
                 }
-                else if(strcmp(temp->folder[j].file_name,name)==0)
+                else if(strcmp(temp->folder[j].file_name,name)==0){
+                    V(make_dir_entry_sem);
                     return -1;
+                }
             }
         }
         else{
@@ -125,16 +141,37 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
             init_directory_block(temp);
             temp->folder[0].inode_num = file_inode;
             strcpy(temp->folder[0].file_name,name);
+            V(make_dir_entry_sem);
             return 0;
         }
     }
+    V(make_dir_entry_sem);
+}
 
+void init_semaphores(){
+    inode_sem = semget(IPC_PRIVATE, 1, 0777|IPC_CREAT);
+    data_block_sem = semget(IPC_PRIVATE, 1, 0777|IPC_CREAT);
+    make_dir_entry_sem = semget(IPC_PRIVATE, 1, 0777|IPC_CREAT);
+
+    semctl(inode_sem, 0, SETVAL, 1);
+    semctl(data_block_sem, 0, SETVAL, 1);
+    semctl(make_dir_entry_sem, 0, SETVAL, 1);
+
+    pop.sem_num = vop.sem_num = 0;
+    pop.sem_flg = vop.sem_flg = 0;
+    pop.sem_op = -1 ; vop.sem_op = 1 ;
 }
 
 int create_myfs(int size){
     int size_in_bytes = size << 20;
     myfs_size=size_in_bytes;
-    myfs = (char*)malloc(size_in_bytes);
+
+    shmid = shmget(IPC_PRIVATE,size_in_bytes,0777 | IPC_CREAT);
+    myfs = (char *) shmat(shmid,0,0);
+
+    // myfs = (char*)malloc(size_in_bytes);
+
+    
 
     if(myfs == NULL)
         return -1;
@@ -164,6 +201,7 @@ int create_myfs(int size){
     mySB->bitmap.set(0,true);
     curr_inode = 0;
     fd_table_init();
+    init_semaphores();
     return 0;
 }
 
@@ -685,11 +723,11 @@ void fd_table_init()
 
 int getnextfreefdentry()
 {
-     for(int i=0;i<MAX_FD_ENTRIES;i++)
-     {
+    for(int i=0;i<MAX_FD_ENTRIES;i++)
+    {
         if(fd_table[i].file_inode_num==-1) 
         return i;
-     }
+    }
     return -1;
 }
 
@@ -751,7 +789,9 @@ int dump_myfs(char *dumpfile)
     write(file_fd,buf,12);
     write(file_fd,myfs,myfs_size);
     close(file_fd);
-    free(myfs);
+    // free(myfs);
+    // shmdt(myfs);
+    // shmctl(shmid, IPC_RMID, 0);
     return 0;
 }
 
@@ -765,12 +805,17 @@ int restore_myfs(char *dumpfile)
     char buf[12];
     read(file_fd,buf,12);
     myfs_size=atoi(buf);
-    myfs = (char*)malloc(myfs_size);
+    // myfs = (char*)malloc(myfs_size);
+
+    shmid = shmget(IPC_PRIVATE,myfs_size,0777 | IPC_CREAT);
+    myfs = (char *) shmat(shmid,0,0);
+
     read(file_fd,myfs,myfs_size);
     mySB = (super_block *) myfs;
     mydataspace = (data_block*)(myfs + DATA_START);
     curr_inode=0;
     fd_table_init();
+    init_semaphores();
     close(file_fd);
     return 0;
 }
