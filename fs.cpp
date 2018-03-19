@@ -698,7 +698,10 @@ int open_myfs(char *filename, char mode)
     int file_inodenum = search_fileinode(filename,false);
     if(file_inodenum == -1) {
         file_inodenum = getnextfreeinode();
-        init_inode(getinodeaddr(file_inodenum));
+        inode *new_inode = getinodeaddr(file_inodenum);
+        init_inode(new_inode);
+        new_inode->st_mode = 0664;
+        new_inode->file_type = 1;
         make_directory_entry(filename,file_inodenum,curr_inode);
     }
     int tmp=getnextfreefdentry();
@@ -748,6 +751,7 @@ int dump_myfs(char *dumpfile)
     write(file_fd,buf,12);
     write(file_fd,myfs,myfs_size);
     close(file_fd);
+    free(myfs);
     return 0;
 }
 
