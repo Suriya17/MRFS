@@ -12,8 +12,11 @@
 #include <vector>
 #include <unistd.h>
 #include <algorithm>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
 
-
+#define MAX_FD_ENTRIES 100
 #define MAX_BLOCKS 131072
 #define MAX_INODES 126
 #define BLOCK_SIZE 256
@@ -21,10 +24,21 @@
 #define DATA_START 32768
 #define DATA_DIR_START 128
 
+
+#define P(s) semop(s, &pop, 1)  /* pop is the structure we pass for doing
+				   the P(s) operation */
+#define V(s) semop(s, &vop, 1)  /* vop is the structure we pass for doing
+				   the V(s) operation */
+
+extern int inode_sem, data_block_sem, make_dir_entry_sem;
+extern struct sembuf pop, vop ;
+
 using namespace std;
 
+extern int myfs_size;
 extern char* myfs;
 extern int curr_inode;
+extern int shmid;
 
 struct data_block{
     char data[BLOCK_SIZE];
@@ -42,10 +56,21 @@ struct super_block{
     bitset<MAX_INODES> inode_bitmap;
 };
 
+struct fd_entry{
+    int file_inode_num;
+    int bytes_done;
+    char mode;
+};
+
+
 struct directory{
     char file_name[30];
     int16_t inode_num;
 };
+
+extern super_block *mySB ;
+extern data_block *mydataspace;
+extern fd_entry fd_table[MAX_FD_ENTRIES];
 
 struct directory_block{
     directory folder[BLOCK_SIZE/32];
@@ -62,18 +87,26 @@ struct inode{
     time_t last_read;
 };
 
+
+void init_semaphores();
+void fd_table_init();
 void perm_print(mode_t mode);
 int myprint(char *str,int size);
 int getnextfreeblock();
 int getnextfreeinode();
+int getnextfreefdentry();
 directory_block* getdbaddr(int i);
 inode * getinodeaddr(int i);
 indirect_pointers * getidpaddr(int i);
 data_block *getdatablockaddr(int i);
-int search_fileinode(char *filename);
-int make_directory_entry(char *name, int file_inode);
+int search_fileinode(char *filename, bool should_delete);
+int make_directory_entry(char *name, int file_inode, int parent_inode);
 int init_inode(inode *myinode);
 int init_directory_block(directory_block *mydirblock);
+void init_indirect_block(int blk_num);
+void print_directory_block(directory_block *temp);
+int decTooct(int i);
+
 int create_myfs(int size);
 int copy_pc2myfs (char *source, char *dest);
 int copy_myfs2pc (char *source, char *dest);
@@ -83,7 +116,7 @@ int ls_myfs();
 int mkdir_myfs(char *dirname);
 int chdir_myfs(char *dirname);
 int rmdir_myfs(char *dirname);
-int open_myfs(char *filename, char *mode);
+int open_myfs(char *filename, char mode);
 int close_myfs(int fd);
 int read_myfs(int fd, int nbytes, char *buf);
 int write_myfs(int fd, int nbytes, char *buf);

@@ -2,10 +2,20 @@
 
 char* myfs = NULL;
 int curr_inode=0;
+int myfs_size=0;
 super_block *mySB ;
 data_block *mydataspace;
+fd_entry fd_table[MAX_FD_ENTRIES];
+int shmid;
+int inode_sem, data_block_sem, make_dir_entry_sem;
+struct sembuf pop, vop ;
 
-
+void init_indirect_block(int blk_num)
+{
+    indirect_pointers * idp = getidpaddr(blk_num);
+    for(int i=0;i<64;i++)
+        idp->arr[i]=-1;
+}
 
 int init_inode(inode *myinode){
     for(int i = 0; i < 8 ; i++)
@@ -41,30 +51,36 @@ int init_directory_block(directory_block *mydirblock){
 }
 
 int getnextfreeblock(){
+    P(data_block_sem);
     for(int i = 0; i < mySB->max_blocks; i++){
         if(mySB->bitmap[i] == 0){
             mySB->bitmap[i] = 1;
             mySB->used_blocks++;
+            V(data_block_sem);
             return i;
         }
     }
+    V(data_block_sem);
     return -1;
 }
 
 int getnextfreeinode(){
+    P(inode_sem);
     for(int i = 0; i < mySB->max_inodes; i++){
         if(mySB->inode_bitmap[i] == 0){
             mySB->inode_bitmap[i] = 1;
             mySB->used_inodes++;
+            V(inode_sem);
             return i;
         }
     }
+    V(inode_sem);
     return -1;
 }
 
 
 int make_directory_entry(char *name, int file_inode,int entry_inode){
-
+    P(make_dir_entry_sem);
     inode * parent_inode=NULL;
     parent_inode = (inode *)(myfs + INODE_START+entry_inode*128);
     directory_block *temp;
@@ -77,10 +93,13 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
                 if(temp->folder[j].inode_num == -1){
                     temp->folder[j].inode_num = file_inode;
                     strcpy(temp->folder[j].file_name,name);
+                    V(make_dir_entry_sem);
                     return 0;
                 }
-                else if(strcmp(temp->folder[j].file_name,name)==0)
+                else if(strcmp(temp->folder[j].file_name,name)==0){
+                    V(make_dir_entry_sem);
                     return -1;
+                }
             }
         }
         else if(parent_inode->direct_blocks[i] == -1){
@@ -89,14 +108,70 @@ int make_directory_entry(char *name, int file_inode,int entry_inode){
             init_directory_block(temp);
             temp->folder[0].inode_num = file_inode;
             strcpy(temp->folder[0].file_name,name);
+            V(make_dir_entry_sem);
             return 0;
         }
     }
+
+    if(parent_inode->indirect_block < 0){
+        parent_inode->indirect_block = getnextfreeblock();
+        init_indirect_block(parent_inode->indirect_block);
+    }
+
+    indirect_pointers *single_indirect = getidpaddr(parent_inode->indirect_block);
+    for(int i = 0; i < 64; i++){
+        if(single_indirect->arr[i] > 0){
+            temp = getdbaddr(single_indirect->arr[i]);
+            for(int j = 0; j < 8; j++){
+                if(temp->folder[j].inode_num == -1){
+                    temp->folder[j].inode_num = file_inode;
+                    strcpy(temp->folder[j].file_name,name);
+                    V(make_dir_entry_sem);
+                    return 0;
+                }
+                else if(strcmp(temp->folder[j].file_name,name)==0){
+                    V(make_dir_entry_sem);
+                    return -1;
+                }
+            }
+        }
+        else{
+            single_indirect->arr[i] = getnextfreeblock();
+            temp = getdbaddr(single_indirect->arr[i]);
+            init_directory_block(temp);
+            temp->folder[0].inode_num = file_inode;
+            strcpy(temp->folder[0].file_name,name);
+            V(make_dir_entry_sem);
+            return 0;
+        }
+    }
+    V(make_dir_entry_sem);
+}
+
+void init_semaphores(){
+    inode_sem = semget(IPC_PRIVATE, 1, 0777|IPC_CREAT);
+    data_block_sem = semget(IPC_PRIVATE, 1, 0777|IPC_CREAT);
+    make_dir_entry_sem = semget(IPC_PRIVATE, 1, 0777|IPC_CREAT);
+
+    semctl(inode_sem, 0, SETVAL, 1);
+    semctl(data_block_sem, 0, SETVAL, 1);
+    semctl(make_dir_entry_sem, 0, SETVAL, 1);
+
+    pop.sem_num = vop.sem_num = 0;
+    pop.sem_flg = vop.sem_flg = 0;
+    pop.sem_op = -1 ; vop.sem_op = 1 ;
 }
 
 int create_myfs(int size){
     int size_in_bytes = size << 20;
-    myfs = (char*)malloc(size_in_bytes);
+    myfs_size=size_in_bytes;
+
+    shmid = shmget(IPC_PRIVATE,size_in_bytes,0777 | IPC_CREAT);
+    myfs = (char *) shmat(shmid,0,0);
+
+    // myfs = (char*)malloc(size_in_bytes);
+
+    
 
     if(myfs == NULL)
         return -1;
@@ -125,7 +200,8 @@ int create_myfs(int size){
     root_dir->folder[0].inode_num = 0;
     mySB->bitmap.set(0,true);
     curr_inode = 0;
-
+    fd_table_init();
+    init_semaphores();
     return 0;
 }
 
@@ -210,6 +286,7 @@ int copy_pc2myfs (char *source, char *dest){
 
     if(free_block_num.size()>8){
         int indirect_tmp = getnextfreeblock();
+        init_indirect_block(indirect_tmp);
         indirect_pointers * idp = getidpaddr(indirect_tmp);
         free_inode->indirect_block = indirect_tmp;
 
@@ -222,6 +299,7 @@ int copy_pc2myfs (char *source, char *dest){
     if(free_block_num.size() > 72)
     {
         int indirect_tmp = getnextfreeblock();
+        init_indirect_block(indirect_tmp);
         indirect_pointers * iddp = getidpaddr(indirect_tmp);
         indirect_pointers * idp;
         free_inode->double_indirect_block = indirect_tmp;
@@ -229,6 +307,7 @@ int copy_pc2myfs (char *source, char *dest){
         for(int i = 72; i < free_block_num.size();i++){
             if((i-72)%64 == 0){
                 tmp = getnextfreeblock();
+                init_indirect_block(tmp);
                 iddp->arr[(i-72)/64] = tmp;
                 idp = getidpaddr(tmp);
             }
@@ -253,31 +332,50 @@ void perm_print(mode_t mode)
     cout<< ((mode & S_IXOTH) ? "x" : "-");
 }
 
+
+void print_directory_block(directory_block *temp){
+    inode *file_inode;
+    for(int j = 0;j < 8;j++)
+    {
+        if(temp->folder[j].inode_num!=-1)
+        {
+            file_inode=getinodeaddr(temp->folder[j].inode_num);
+            cout<< ((file_inode->file_type==0) ? "d" : "-");
+            perm_print(file_inode->st_mode);
+            cout<<" ";
+            cout<<file_inode->file_size<<" ";
+            cout<<setw(20)<<temp->folder[j].file_name<<" ";
+            cout<<ctime(& (file_inode->last_modified));
+        }
+    }
+}
+
 int ls_myfs()
 {
     inode * parent_inode=NULL;
     parent_inode = (inode *)(myfs + INODE_START+curr_inode*128);
-    inode *file_inode=NULL;
     for(int i=0;i<8;i++)
     {
        // cout<<"245o\n";
         int tmp=parent_inode->direct_blocks[i];
-        if(tmp==-1) break;
+        if(tmp==-1) continue;
         directory_block *temp=getdbaddr(tmp);
-        for(int j=0;j<8;j++)
-        {
-            if(temp->folder[j].inode_num!=-1)
-            {
-                file_inode=getinodeaddr(temp->folder[j].inode_num);
-                cout<< ((file_inode->file_type==0) ? "d" : "-");
-                perm_print(file_inode->st_mode);
-                cout<<" ";
-                cout<<file_inode->file_size<<" ";
-                cout<<setw(20)<<temp->folder[j].file_name<<" ";
-                cout<<ctime(& (file_inode->last_modified));
-            }
+        print_directory_block(temp);
+    }
+
+    if(parent_inode->indirect_block == -1)
+        return 0;
+
+    indirect_pointers *single_indirect = getidpaddr(parent_inode->indirect_block);
+    for(int i = 0; i < 64; i++){
+        if(single_indirect->arr[i] == -1)
+            continue;
+        else{
+            directory_block *temp = getdbaddr(single_indirect->arr[i]);
+            print_directory_block(temp);
         }
     }
+
 }
 
 int search_fileinode(char *filename,bool should_delete){
@@ -291,24 +389,42 @@ int search_fileinode(char *filename,bool should_delete){
         directory_block *temp=getdbaddr(tmp);
         for(int j=0;j<8;j++)
         {
-
             if(strcmp(filename,temp->folder[j].file_name)==0&&temp->folder[j].inode_num>=0)
             {
-                    tmp=temp->folder[j].inode_num;
-                    if(should_delete)
-                    {
-                        temp->folder[j].inode_num=-1;
-                        parent_inode->file_size-=32;
-                    }
-                    return tmp;
+                tmp=temp->folder[j].inode_num;
+                if(should_delete)
+                {
+                    temp->folder[j].inode_num=-1;
+                    parent_inode->file_size-=32;
+                }
+                return tmp;
             }
         }
-
     }
+
+    if(parent_inode->indirect_block > 0){
+        indirect_pointers * idp = getidpaddr(parent_inode->indirect_block);
+        for(int i = 0; i < 64; i++){
+            if(idp->arr[i] > 0){
+                directory_block *temp=getdbaddr(idp->arr[i]);
+                for(int j=0;j<8;j++)
+                {
+                    if(strcmp(filename,temp->folder[j].file_name)==0&&temp->folder[j].inode_num>=0)
+                    {
+                        int tmp=temp->folder[j].inode_num;
+                        if(should_delete)
+                        {
+                            temp->folder[j].inode_num=-1;
+                            parent_inode->file_size-=32;
+                        }
+                        return tmp;
+                    }
+                }
+            }
+        }
+    }
+
     return -1;
-
-
-
 }
 
 int rm_myfs (char *filename){
@@ -413,7 +529,7 @@ int copy_myfs2pc (char *source, char *dest)
     inode * file_inode=(inode *)getinodeaddr(tmp);
     int f_size= file_inode->file_size;
     int blocks_filled=getnumblocks(f_size);
-    cout <<"copy file - " <<blocks_filled << endl;
+  //  cout <<"copy file - " <<blocks_filled << endl;
     int tmp_write;
 
     for(int i=0;i<min(8,blocks_filled);i++)
@@ -550,33 +666,419 @@ int rmdir_myfs(char *dirname)
                         curr_inode=curr_inode_temp;
                     }
                     else{
-                    curr_inode=tmp; 
-                    rm_myfs(dir_entry->folder[k].file_name);
-                    curr_inode=curr_inode_temp;
+                        curr_inode=tmp; 
+                        rm_myfs(dir_entry->folder[k].file_name);
+                        curr_inode=curr_inode_temp;
                     }
             }
         }
         if(mySB->bitmap[del_inode->direct_blocks[i]]==1) mySB->used_blocks--;
         mySB->bitmap[del_inode->direct_blocks[i]]=0;
     }
+
+    if(del_inode->indirect_block > 0){
+        indirect_pointers *single_indirect = getidpaddr(del_inode->indirect_block);
+        for(int i = 0; i < 64; i++){
+            if(single_indirect->arr[i] > 0){
+
+                directory_block *dir_entry=getdbaddr(single_indirect->arr[i]);
+                for(int k = 0;k < 8; k++){
+                    if(dir_entry->folder[k].inode_num!=-1\
+                    &&(strcmp(dir_entry->folder[k].file_name,".")!=0)\
+                    &&(strcmp(dir_entry->folder[k].file_name,"..")!=0)\
+                    &&(strcmp(dir_entry->folder[k].file_name,"root")!=0))
+                    {
+                        cout<<"deleting :"<<dir_entry->folder[k].file_name<<endl;
+                        int inode_to_del=dir_entry->folder[k].inode_num;
+                        inode *new_inode1=getinodeaddr(inode_to_del);
+                        if(new_inode1->file_type==0)
+                        {
+                            curr_inode=tmp; 
+                            rmdir_myfs(dir_entry->folder[k].file_name);
+                            curr_inode=curr_inode_temp;
+                        }
+                        else{
+                            curr_inode=tmp; 
+                            rm_myfs(dir_entry->folder[k].file_name);
+                            curr_inode=curr_inode_temp;
+                        }
+                    }
+
+                    if(mySB->bitmap[single_indirect->arr[i]]==1) mySB->used_blocks--;
+                    mySB->bitmap[del_inode->indirect_block]=0;
+                }
+            }
+        }
+    }
+
     mySB->inode_bitmap[tmp]=0;
     mySB->max_inodes--;
 }
 
+void fd_table_init()
+{
+    for(int i=0;i<MAX_FD_ENTRIES;i++)
+        fd_table[i].file_inode_num=-1;
+}
 
+int getnextfreefdentry()
+{
+    for(int i=0;i<MAX_FD_ENTRIES;i++)
+    {
+        if(fd_table[i].file_inode_num==-1) 
+        return i;
+    }
+    return -1;
+}
+
+int open_myfs(char *filename, char mode)
+{
+    int file_inodenum = search_fileinode(filename,false);
+    if(file_inodenum == -1) {
+        file_inodenum = getnextfreeinode();
+        inode *new_inode = getinodeaddr(file_inodenum);
+        init_inode(new_inode);
+        new_inode->st_mode = 0664;
+        new_inode->file_type = 1;
+        make_directory_entry(filename,file_inodenum,curr_inode);
+    }
+    int tmp=getnextfreefdentry();
+    if(tmp==-1)
+    {
+        cout<<"No space left in fd_table\n";
+        return -1;
+    }
+    fd_table[tmp].file_inode_num=file_inodenum;
+    fd_table[tmp].bytes_done=0;
+    fd_table[tmp].mode=mode;
+    return tmp;
+}
+
+int close_myfs(int fd)
+{
+    if(fd>=MAX_FD_ENTRIES||(fd_table[fd].file_inode_num==-1))
+        return -1;
+    fd_table[fd].file_inode_num=-1;
+    return 0;
+}
+
+
+
+
+int eof_myfs(int fd)
+{
+    if(fd>=MAX_FD_ENTRIES||(fd_table[fd].file_inode_num==-1)) 
+        return -1;
+    int file_inodenum=fd_table[fd].file_inode_num;
+    int bytes_read=fd_table[fd].bytes_done;
+    inode * file_inode=(inode *)getinodeaddr(file_inodenum);
+    int f_size= file_inode->file_size;
+    if(bytes_read==f_size)  return 1;
+    else return 0;
+}
+
+int dump_myfs(char *dumpfile)
+{
+    int file_fd=open(dumpfile,O_WRONLY|O_CREAT,0664);
+    if(file_fd < 0){
+        cout << "OH NO FILE FD" << endl;
+        return -1;
+    }
+    char buf[12];
+    sprintf(buf,"%d",myfs_size);
+    write(file_fd,buf,12);
+    write(file_fd,myfs,myfs_size);
+    close(file_fd);
+    // free(myfs);
+    // shmdt(myfs);
+    // shmctl(shmid, IPC_RMID, 0);
+    return 0;
+}
+
+int restore_myfs(char *dumpfile)
+{
+    int file_fd=open(dumpfile,O_RDONLY);
+    if(file_fd < 0){
+        cout << "OH NO FILE FD" << endl;
+        return -1;
+    }
+    char buf[12];
+    read(file_fd,buf,12);
+    myfs_size=atoi(buf);
+    // myfs = (char*)malloc(myfs_size);
+
+    shmid = shmget(IPC_PRIVATE,myfs_size,0777 | IPC_CREAT);
+    myfs = (char *) shmat(shmid,0,0);
+
+    read(file_fd,myfs,myfs_size);
+    mySB = (super_block *) myfs;
+    mydataspace = (data_block*)(myfs + DATA_START);
+    curr_inode=0;
+    fd_table_init();
+    init_semaphores();
+    close(file_fd);
+    return 0;
+}
+
+int read_myfs(int fd, int nbytes, char *buf)
+{
+    int temp=nbytes;
+    if(fd>=MAX_FD_ENTRIES||(fd_table[fd].file_inode_num==-1)||(fd_table[fd].mode=='w')) 
+        return -1;
+    int tmp=fd_table[fd].file_inode_num;
+    int bytes_read=fd_table[fd].bytes_done;
+    int start_block=bytes_read/BLOCK_SIZE;
+    // cout << "Start block :" << start_block << endl;
+    inode * file_inode=(inode *)getinodeaddr(tmp);
+    int f_size= file_inode->file_size;
+    if(bytes_read+nbytes>f_size)
+    {
+        nbytes=f_size-bytes_read;
+        temp=nbytes;
+    }
+    int blocks_filled=getnumblocks(f_size);
+    int tmp_write;
+    int buffstart=0;
+    for(int i=0;i<min(8,blocks_filled);i++)
+    {
+        if(nbytes==0) break;
+        if(i==start_block)
+        {
+            int rem=BLOCK_SIZE-(bytes_read%BLOCK_SIZE);
+            // cout << "Remaining :" << rem << endl;
+            // cout << "nbytes :" << nbytes << endl; 
+            memcpy(buf+buffstart,getdatablockaddr(file_inode->direct_blocks[i])->data+(bytes_read%BLOCK_SIZE),min(nbytes,rem));
+            // cout<<"\n"<<i<<" th block :\n";
+            //  myprint(buf+buffstart,min(nbytes,rem));
+            buffstart+=(min(nbytes,rem));
+            nbytes-=(min(nbytes,rem));
+            // cout<<"Buff start1  :"<<buffstart<<endl;
+        }
+        else if(i>start_block)
+        {
+            memcpy(buf+buffstart,getdatablockaddr(file_inode->direct_blocks[i])->data,min(nbytes,BLOCK_SIZE));
+            // cout<<"\n"<<i<<" th block yo :\n";
+            // myprint(buf+buffstart,min(nbytes,BLOCK_SIZE));
+            buffstart+=min(nbytes,BLOCK_SIZE);
+            nbytes-=min(nbytes,BLOCK_SIZE);
+            // cout<<"Buff start2  :"<<buffstart<<endl;
+        }
+       
+    }
+    
+    if(blocks_filled > 8){
+        
+        indirect_pointers * idp = getidpaddr(file_inode->indirect_block);
+
+        for(int i = 8; i < min(72,blocks_filled);i++){            
+            if(nbytes==0) break;
+            if(i==start_block)
+            {
+                int rem=BLOCK_SIZE-(bytes_read%BLOCK_SIZE);
+                memcpy(buf+buffstart,getdatablockaddr(idp->arr[i-8])->data+(bytes_read%BLOCK_SIZE),min(nbytes,rem));
+                //myprint(buf+buffstart,min(nbytes,rem));
+                buffstart+=(min(nbytes,rem));
+                nbytes-=(min(nbytes,rem));
+            }
+            else if(i>start_block)
+            {
+                memcpy(buf+buffstart,getdatablockaddr(idp->arr[i-8])->data,min(nbytes,BLOCK_SIZE));
+                //myprint(buf+buffstart,min(nbytes,BLOCK_SIZE));
+                buffstart+=min(nbytes,BLOCK_SIZE);
+                nbytes-=min(nbytes,BLOCK_SIZE);
+                
+            }
+        }
+    }
+    
+    if(blocks_filled > 72)
+    {
+        indirect_pointers * iddp = getidpaddr(file_inode->double_indirect_block);
+        indirect_pointers * idp;
+        for(int i = 72; i < blocks_filled;i++){
+            if((i-72)%64 == 0){
+                idp = getidpaddr(iddp->arr[(i-72)/64]);
+            }
+            if(nbytes==0) break;
+            if(i==start_block)
+            {
+                int rem=BLOCK_SIZE-(bytes_read%BLOCK_SIZE);
+                memcpy(buf+buffstart,getdatablockaddr(idp->arr[(i-72)%64])->data+(bytes_read%BLOCK_SIZE),min(nbytes,rem));
+                //  myprint(buf+buffstart,min(nbytes,rem));
+                buffstart+=(min(nbytes,rem));
+                nbytes-=(min(nbytes,rem));                
+            }
+            else if(i>start_block)
+            {
+                memcpy(buf+buffstart,getdatablockaddr(idp->arr[(i-72)%64])->data,min(nbytes,BLOCK_SIZE));
+                // myprint(buf+buffstart,min(nbytes,BLOCK_SIZE));
+                buffstart+=min(nbytes,BLOCK_SIZE);
+                nbytes-=min(nbytes,BLOCK_SIZE);
+            }
+        }
+    }
+    fd_table[fd].bytes_done+=temp;
+    file_inode->last_read = time(0);
+    
+    return temp;
+}
+
+
+
+int write_myfs(int fd, int nbytes, char *buf)
+{
+    int temp=nbytes;
+    if(fd>=MAX_FD_ENTRIES||(fd_table[fd].file_inode_num==-1)||(fd_table[fd].mode=='r')) 
+        return -1;
+    int tmp=fd_table[fd].file_inode_num;
+    int bytes_read=fd_table[fd].bytes_done;
+    int start_block=bytes_read/BLOCK_SIZE;
+    inode * file_inode=(inode *)getinodeaddr(tmp);
+    int f_size= file_inode->file_size;
+    int buffstart=0;
+    for(int i=0;i<8;i++)
+    {
+        if(nbytes==0) break;
+        if(i==start_block)
+        {
+            int rem=BLOCK_SIZE-(bytes_read%BLOCK_SIZE);
+            if(file_inode->direct_blocks[i]==-1)
+            {
+                file_inode->direct_blocks[i]=getnextfreeblock();
+            }
+            memcpy(getdatablockaddr(file_inode->direct_blocks[i])->data+(bytes_read%BLOCK_SIZE),buf+buffstart,min(nbytes,rem));
+            buffstart+=(min(nbytes,rem));
+            nbytes-=(min(nbytes,rem));
+        }
+        else if(i>start_block)
+        {
+            if(file_inode->direct_blocks[i]==-1)
+                file_inode->direct_blocks[i]=getnextfreeblock();
+            memcpy(getdatablockaddr(file_inode->direct_blocks[i])->data,buf+buffstart,min(nbytes,BLOCK_SIZE));
+            buffstart+=min(nbytes,BLOCK_SIZE);
+            nbytes-=min(nbytes,BLOCK_SIZE);
+        }
+    }
+    if(nbytes>0){
+    
+        if(file_inode->indirect_block==-1) 
+        {
+            file_inode->indirect_block=getnextfreeblock();
+            init_indirect_block(file_inode->indirect_block);
+        }    
+        indirect_pointers * idp = getidpaddr(file_inode->indirect_block);
+
+        for(int i = 8; i < 72;i++){ 
+            if(nbytes==0) break;
+            if(i==start_block)
+            {
+                if(idp->arr[i-8]==-1)
+                    idp->arr[i-8]=getnextfreeblock();
+                int rem=BLOCK_SIZE-(bytes_read%BLOCK_SIZE);
+                memcpy(getdatablockaddr(idp->arr[i-8])->data+(bytes_read%BLOCK_SIZE),buf+buffstart,min(nbytes,rem));
+                buffstart+=(min(nbytes,rem));
+                nbytes-=(min(nbytes,rem));
+            }
+            else if(i>start_block)
+            {
+                if(idp->arr[i-8]==-1)
+                    idp->arr[i-8]=getnextfreeblock();
+                memcpy(getdatablockaddr(idp->arr[i-8])->data,buf+buffstart,min(nbytes,BLOCK_SIZE));
+                buffstart+=min(nbytes,BLOCK_SIZE);
+                nbytes-=min(nbytes,BLOCK_SIZE);
+                
+            }
+        }
+    }
+    if(nbytes>0){
+        if(file_inode->double_indirect_block==-1) 
+        {
+            file_inode->double_indirect_block=getnextfreeblock();
+            init_indirect_block(file_inode->double_indirect_block);
+        }
+        indirect_pointers * idp;
+        indirect_pointers * iddp = getidpaddr(file_inode->double_indirect_block);
+        for(int i = 72; i < 72+(64*64);i++){
+            if(nbytes==0) break;
+            if((i-72)%64 == 0){
+                if(iddp->arr[(i-72)/64]==-1) 
+                {
+                    iddp->arr[(i-72)/64]=getnextfreeblock();
+                    init_indirect_block(iddp->arr[(i-72)/64]);
+                }
+                idp = getidpaddr(iddp->arr[(i-72)/64]);
+            }
+            
+            if(i==start_block)
+            {
+                if(idp->arr[(i-72)%64]==-1) idp->arr[(i-72)%64]=getnextfreeblock();
+                int rem=BLOCK_SIZE-(bytes_read%BLOCK_SIZE);
+                memcpy(getdatablockaddr(idp->arr[(i-72)%64])->data+(bytes_read%BLOCK_SIZE),buf+buffstart,min(nbytes,rem));
+                buffstart+=(min(nbytes,rem));
+                nbytes-=(min(nbytes,rem));                
+            }
+            else if(i>start_block)
+            {
+                if(idp->arr[(i-72)%64]==-1) idp->arr[(i-72)%64]=getnextfreeblock();
+                memcpy(getdatablockaddr(idp->arr[(i-72)%64])->data,buf+buffstart,min(nbytes,BLOCK_SIZE));
+                buffstart+=min(nbytes,BLOCK_SIZE);
+                nbytes-=min(nbytes,BLOCK_SIZE);
+            }
+        }
+    }
+    
+    fd_table[fd].bytes_done+=temp;
+    file_inode->file_size=max(f_size,fd_table[fd].bytes_done);
+    file_inode->last_modified = time(0);
+    return temp;
+}
+
+
+int decTooct(int i)
+{
+    return (i%10) + ((i%100 - i%10)/10)*8 + ((i%1000 - i%100)/100)*64;
+}
+
+int chmod_myfs(char *name, int mode)
+{
+    int inode_num = search_fileinode(name,false);
+
+    if(inode_num == -1)
+        return -1;
+
+    inode *inode_ptr = getinodeaddr(inode_num);
+    inode_ptr->st_mode = decTooct(mode);
+    return 0;
+}
+
+int status_myfs(){
+    cout << "Total size of myfs : " << mySB->total_size << endl;
+    cout << "Total available datablocks : " << mySB->max_blocks \
+    << "Total used blocks : " << mySB->used_blocks << endl;
+    cout << "Total available inodes : " << mySB->max_inodes \
+    << "Total used inodes : " << mySB->used_inodes << endl;
+    cout << "Total free inodes : " << mySB->max_inodes - mySB->used_inodes\
+    << "Total free blocks : " << mySB->max_blocks - mySB->used_blocks << endl;
+    return 0;
+}
+
+/**
 int main()
 {
-    create_myfs(10);
+    create_myfs(15);
     directory_block *root_dir = (directory_block*)(myfs + DATA_START);
     cout<<"Added 12 files into myfs\n";
     for(int i=0;i<12;i++)
     {
         char temp_name[15];
         sprintf(temp_name,"mycode%d.cpp",i);
-        cout << "Copied test.cpp file to file systems with name " << temp_name << endl; 
-        copy_pc2myfs((char *)"test.cpp",temp_name);
+        copy_pc2myfs((char *)"fs.cpp",temp_name);
     }
+    copy_pc2myfs((char *)"Lab_5.pdf",(char *)"Lab_5.pdf");
+    copy_pc2myfs((char *)"fs.cpp",(char *)"test.pdf");
     int opt;
+    char buff[245];
+    int fd,temp;
     string s1,s2;
     while(1)
     {
@@ -588,6 +1090,8 @@ int main()
         cout<<"6. copy a new_file from PC to myfs\n";
         cout<<"7. copy a file from myfs to PC\n";
         cout<<"8. exit\n";
+        cout<<"9. dumptofile\n";
+        cout<<"10. restorefromfile\n";
         cout<<"select a option : ";
         cin>>opt;
         switch(opt)
@@ -630,12 +1134,42 @@ int main()
             case 8: 
                 free(myfs);
                 return 0;
+            case 9:
+                fd=chmod_myfs((char *)"yo",777);
+                
+                break;
+            case 10:
+                restore_myfs((char *)"backup"); break;
             default:
                 cout<<"Wrong option entered\n";
                 break;
         }
     }
-    
+
+    // ls_myfs();
+    // fd=open_myfs((char *)"Lab_5.pdf",'r');
+    // int fd1=open_myfs((char *)"test.pdf",'w');
+    // if(fd1==-1) cout<<"oh no fd\n";
+    // temp=read_myfs(fd,245,buff);
+    // write_myfs(fd1,temp,buff);
+    // // int sz=0;
+    // // sz+=temp;
+    // // cout << temp << endl;
+    // while(temp)
+    // {
+    //     temp=read_myfs(fd,245,buff);
+    //     write_myfs(fd1,temp,buff);
+    //     // showfile_myfs((char *)"test.pdf");
+        
+    //     // cout<<"new read :" <<endl;
+    //    // cout << temp << endl;
+    // }
+    // // cout<<sz<<endl;
+
+    // copy_myfs2pc((char *)"test.pdf",(char *)"test.pdf");
+    // close_myfs(fd);
+    // close_myfs(fd1);
 }
 
+*/
 
