@@ -573,7 +573,8 @@ int main()
     {
         char temp_name[15];
         sprintf(temp_name,"mycode%d.cpp",i);
-        copy_pc2myfs((char *)"fs.cpp",temp_name);
+        cout << "Copied test.cpp file to file systems with name " << temp_name << endl; 
+        copy_pc2myfs((char *)"test.cpp",temp_name);
     }
     int opt;
     string s1,s2;
